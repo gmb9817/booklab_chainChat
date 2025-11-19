@@ -9,7 +9,12 @@ import base64
 import os
 import sys
 import textwrap
+import ctypes
 
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    pass
 # ----------------------------------------------------------
 # [0] 디자인 테마 (Dark Mode)
 # ----------------------------------------------------------
@@ -28,8 +33,8 @@ THEME = {
     
     "btn_primary": "#0e639c",
     "btn_danger": "#c53030",
-    "btn_pin_active": "#d8a016", # 핀 고정 활성화 색상 (Gold)
-    "btn_pin_inactive": "#333333" # 핀 비활성화 (Dark)
+    "btn_pin_active": "#d8a016", # 핀 고정 활성화 (Gold)
+    "btn_pin_inactive": "#333333" # 핀 비활성화
 }
 
 # ----------------------------------------------------------
@@ -101,8 +106,8 @@ def get_local_ip():
 class BlockChatApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("BookLab : Final Edition")
-        self.root.geometry("420x720")
+        self.root.title("chainChat")  # [수정] 서비스명 변경
+        self.root.geometry("750x1200")
         self.root.configure(bg=THEME["app_bg"])
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
@@ -161,7 +166,8 @@ class BlockChatApp:
         frame = tk.Frame(self.root, bg=THEME["app_bg"])
         frame.pack(expand=True)
 
-        tk.Label(frame, text="BookLab", font=("Consolas", 32, "bold"), bg=THEME["app_bg"], fg=THEME["btn_primary"]).pack(pady=(0, 5))
+        # [수정] 서비스명 변경 (chainChat)
+        tk.Label(frame, text="chainChat", font=("Consolas", 32, "bold"), bg=THEME["app_bg"], fg=THEME["btn_primary"]).pack(pady=(0, 5))
         tk.Label(frame, text="SECURE & ENCRYPTED", font=("Consolas", 10), bg=THEME["app_bg"], fg="#666").pack(pady=(0, 40))
         
         tk.Label(frame, text="NICKNAME", font=("Consolas", 9, "bold"), bg=THEME["app_bg"], fg="#aaa").pack(anchor="w", padx=40)
@@ -209,7 +215,7 @@ class BlockChatApp:
         btn_frame = tk.Frame(header, bg=THEME["app_bg"])
         btn_frame.pack(side="right")
 
-        # [기능 복구] Floating Toggle (PIN)
+        # Floating Toggle (PIN)
         self.btn_pin = tk.Button(btn_frame, text="📌 PIN", command=self.toggle_floating, 
                                  bg=THEME["btn_pin_inactive"], fg="#ccc", font=("Consolas", 9, "bold"), relief="flat", padx=8)
         self.btn_pin.pack(side="left", padx=2)
@@ -258,7 +264,7 @@ class BlockChatApp:
         self.root.clipboard_append(self.my_link)
         messagebox.showinfo("Copied", f"Code: {self.my_link}")
 
-    # --- [최종 수정] 메시지 그리기 (정렬 완벽 보장) ---
+    # --- 메시지 그리기 (오른쪽 정렬 유지) ---
     def _ui_draw_bubble(self, sender, message, is_me, is_system):
         self.chat_area.config(state='normal')
         
@@ -268,34 +274,23 @@ class BlockChatApp:
             lbl.pack()
             self.chat_area.window_create(tk.END, window=frame)
             self.chat_area.insert(tk.END, "\n")
-            # 중앙 정렬을 위해 태그 적용
             self.chat_area.tag_configure("center", justify='center')
             self.chat_area.tag_add("center", "end-2l", "end-1l")
         else:
-            # [핵심] 컨테이너를 화면 너비만큼 채우고, 내부에서 pack으로 밀어버림
             container = tk.Frame(self.chat_area, bg=THEME["chat_bg"], pady=2)
-            # width를 충분히 주어 한 줄을 다 차지하게 함 (Text 위젯 너비에 맞춤)
-            # 하지만 window_create는 크기 자동 조절이 까다로우므로,
-            # 내부 Frame 구조로 정렬을 처리함.
             
             if is_me:
-                # 오른쪽 정렬: 컨테이너 안에 '빈 공간' + '말풍선' 배치 or pack(side='right')
-                # 가장 확실한 방법: Text 위젯의 'right' 태그 사용 (이전 시도 실패 원인 분석 후 수정)
-                # -> pack(anchor='e')를 가진 프레임을 삽입하고, 해당 라인에 justify='right' 적용
-                
                 bubble = tk.Label(container, text=message, bg=THEME["my_bubble"], fg=THEME["my_text"],
                                   font=("Malgun Gothic", 10), padx=12, pady=8, justify="left", wraplength=250)
-                bubble.pack(side="right") # 컨테이너 내부에서 오른쪽 정렬
+                bubble.pack(side="right")
                 
                 self.chat_area.window_create(tk.END, window=container)
                 self.chat_area.insert(tk.END, "\n")
                 
-                # [결정적 해결책] 해당 라인 전체를 오른쪽 정렬
                 self.chat_area.tag_configure("right", justify='right')
                 self.chat_area.tag_add("right", "end-2l", "end-1l")
                 
             else:
-                # 왼쪽 정렬
                 name_lbl = tk.Label(container, text=sender, bg=THEME["chat_bg"], fg="#888", font=("Consolas", 8))
                 name_lbl.pack(anchor="w", padx=2)
                 
@@ -305,7 +300,7 @@ class BlockChatApp:
                 
                 self.chat_area.window_create(tk.END, window=container)
                 self.chat_area.insert(tk.END, "\n")
-                # 왼쪽 정렬 태그 (기본값이지만 명시)
+                
                 self.chat_area.tag_configure("left", justify='left')
                 self.chat_area.tag_add("left", "end-2l", "end-1l")
 
@@ -322,7 +317,6 @@ class BlockChatApp:
         display_name = textwrap.fill(filename, width=25)
         
         card = tk.Frame(container, bg=card_bg, bd=0)
-        # 컨테이너 내부 정렬
         if is_me: card.pack(side="right")
         else: card.pack(side="left")
         
@@ -336,7 +330,6 @@ class BlockChatApp:
         self.chat_area.window_create(tk.END, window=container)
         self.chat_area.insert(tk.END, "\n")
         
-        # Text 위젯 라인 정렬 적용
         align = "right" if is_me else "left"
         self.chat_area.tag_configure(align, justify=align)
         self.chat_area.tag_add(align, "end-2l", "end-1l")
@@ -344,7 +337,7 @@ class BlockChatApp:
         self.chat_area.see(tk.END)
         self.chat_area.config(state='disabled')
 
-    # --- 기능 로직 (변경 없음) ---
+    # --- 기능 로직 ---
     def manual_download(self, filename):
         if filename not in self.file_cache:
             messagebox.showerror("Error", "File expired or not found.")
