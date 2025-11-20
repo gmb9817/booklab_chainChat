@@ -9,36 +9,49 @@ import base64
 import os
 import sys
 import textwrap
-import ctypes
+import platform 
 
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)
-except Exception:
-    pass
 # ----------------------------------------------------------
-# [0] 디자인 테마 (Dark Mode)
+# [0] OS 감지 및 폰트 설정
+# ----------------------------------------------------------
+SYSTEM_OS = platform.system()
+
+if SYSTEM_OS == "Darwin":  # macOS
+    FONT_MAIN = "AppleGothic" 
+    FONT_MONO = "Menlo"
+    IS_MAC = True
+else:  # Windows/Linux
+    FONT_MAIN = "Malgun Gothic"
+    FONT_MONO = "Consolas"
+    IS_MAC = False
+
+# [Windows 전용] 고해상도 지원
+if not IS_MAC:
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except: pass
+
+# ----------------------------------------------------------
+# [1] 디자인 테마
 # ----------------------------------------------------------
 THEME = {
-    "app_bg": "#1e1e1e",       # 앱 배경
-    "chat_bg": "#252526",      # 채팅창 배경
-    "input_bg": "#3e3e42",     # 입력창 배경
-    
-    "my_bubble": "#0078d4",    # 내 말풍선 (Blue)
+    "app_bg": "#1e1e1e",       
+    "chat_bg": "#252526",      
+    "input_bg": "#3e3e42",     
+    "my_bubble": "#0078d4",    
     "my_text": "#ffffff",
-    
-    "other_bubble": "#3e3e42", # 상대 말풍선 (Gray)
+    "other_bubble": "#3e3e42", 
     "other_text": "#e0e0e0",
-    
-    "system_text": "#858585",  # 시스템 메시지
-    
+    "system_text": "#858585",  
     "btn_primary": "#0e639c",
     "btn_danger": "#c53030",
-    "btn_pin_active": "#d8a016", # 핀 고정 활성화 (Gold)
-    "btn_pin_inactive": "#333333" # 핀 비활성화
+    "btn_pin_active": "#d8a016",
+    "btn_pin_inactive": "#333333"
 }
 
 # ----------------------------------------------------------
-# [1] 블록체인 백엔드
+# [2] 블록체인 백엔드
 # ----------------------------------------------------------
 class Block:
     def __init__(self, index, timestamp, sender, sender_id, message, previous_hash):
@@ -92,7 +105,7 @@ class Blockchain:
         return True
 
 # ----------------------------------------------------------
-# [2] GUI & Application
+# [3] GUI & Application
 # ----------------------------------------------------------
 def get_local_ip():
     try:
@@ -106,12 +119,14 @@ def get_local_ip():
 class BlockChatApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("chainChat")  # [수정] 서비스명 변경
-        self.root.geometry("750x1200")
+        self.root.title("chainChat")
+        self.root.geometry("800x1200")
         self.root.configure(bg=THEME["app_bg"])
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # Data
+        # 보안 적용 (로그 출력 제거됨)
+        self.root.after(500, self.apply_capture_protection)
+        
         self.my_blockchain = Blockchain()
         self.socket = None
         self.is_host = False
@@ -123,13 +138,30 @@ class BlockChatApp:
         self.next_user_id = 1 
         self.file_cache = {}
         self.running = True 
-        
-        # Floating State
         self.is_floating = False
 
         if not os.path.exists("downloads"): os.makedirs("downloads")
 
         self.setup_main_menu()
+
+    def apply_capture_protection(self):
+        """화면 캡쳐 방지 적용 (Silent Mode)"""
+        if IS_MAC:
+            try:
+                from AppKit import NSApplication, NSWindowSharingNone
+                app = NSApplication.sharedApplication()
+                for window in app.windows():
+                    window.setSharingType_(NSWindowSharingNone)
+            except: pass
+        else:
+            try:
+                import ctypes
+                # WDA_EXCLUDEFROMCAPTURE = 17 (검은 화면 처리)
+                WDA_EXCLUDEFROMCAPTURE = 17 
+                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+                if hwnd == 0: hwnd = self.root.winfo_id()
+                ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+            except: pass
 
     def on_closing(self):
         self.running = False
@@ -152,10 +184,31 @@ class BlockChatApp:
         self.clients = []
         self.my_blockchain = Blockchain()
         self.is_host = False
-        self.root.attributes('-topmost', False) # 초기화 시 플로팅 해제
+        self.root.attributes('-topmost', False)
 
     def safe_update(self, func, *args):
         self.root.after(0, lambda: func(*args))
+
+    def create_hover_button(self, parent, text, command, bg=THEME["btn_primary"], hover_bg="#1177bb", width=None, height=None):
+        kwargs = {
+            "text": text, "command": command, "bg": bg, "fg": "white",
+            "font": (FONT_MONO, 10, "bold"), "relief": "flat",
+            "activebackground": hover_bg, "activeforeground": "white"
+        }
+        if IS_MAC: kwargs["highlightbackground"] = bg
+        
+        btn = tk.Button(parent, **kwargs)
+        if width: btn.config(width=width)
+        if height: btn.config(height=height)
+        
+        def on_enter(e): 
+            if not IS_MAC: btn['bg'] = hover_bg
+        def on_leave(e): 
+            if not IS_MAC: btn['bg'] = bg
+            
+        btn.bind("<Enter>", on_enter)
+        btn.bind("<Leave>", on_leave)
+        return btn
 
     # --- Screen 1: Main Menu ---
     def setup_main_menu(self):
@@ -166,19 +219,15 @@ class BlockChatApp:
         frame = tk.Frame(self.root, bg=THEME["app_bg"])
         frame.pack(expand=True)
 
-        # [수정] 서비스명 변경 (chainChat)
-        tk.Label(frame, text="chainChat", font=("Consolas", 32, "bold"), bg=THEME["app_bg"], fg=THEME["btn_primary"]).pack(pady=(0, 5))
-        tk.Label(frame, text="SECURE & ENCRYPTED", font=("Consolas", 10), bg=THEME["app_bg"], fg="#666").pack(pady=(0, 40))
+        tk.Label(frame, text="chainChat", font=(FONT_MONO, 48, "bold"), bg=THEME["app_bg"], fg=THEME["btn_primary"]).pack(pady=(0, 5))
+        tk.Label(frame, text="SECURE & ENCRYPTED", font=(FONT_MONO, 14), bg=THEME["app_bg"], fg="#666").pack(pady=(0, 60))
         
-        tk.Label(frame, text="NICKNAME", font=("Consolas", 9, "bold"), bg=THEME["app_bg"], fg="#aaa").pack(anchor="w", padx=40)
-        self.entry_nickname = tk.Entry(frame, font=("Malgun Gothic", 12), bg=THEME["input_bg"], fg="white", relief="flat", insertbackground="white")
-        self.entry_nickname.pack(fill="x", padx=40, pady=(5, 20), ipady=8)
+        tk.Label(frame, text="NICKNAME", font=(FONT_MONO, 11, "bold"), bg=THEME["app_bg"], fg="#aaa").pack(anchor="w", padx=80)
+        self.entry_nickname = tk.Entry(frame, font=(FONT_MAIN, 14), bg=THEME["input_bg"], fg="white", relief="flat", insertbackground="white")
+        self.entry_nickname.pack(fill="x", padx=80, pady=(5, 30), ipady=10)
         
-        tk.Button(frame, text="CREATE ROOM", command=self.create_room, bg=THEME["btn_primary"], fg="white", 
-                  font=("Consolas", 11, "bold"), relief="flat", height=2).pack(fill="x", padx=40, pady=5)
-        
-        tk.Button(frame, text="JOIN ROOM", command=self.join_room_screen, bg="#333", fg="white", 
-                  font=("Consolas", 11, "bold"), relief="flat", height=2).pack(fill="x", padx=40, pady=5)
+        self.create_hover_button(frame, "CREATE ROOM", self.create_room, height=2).pack(fill="x", padx=80, pady=8)
+        self.create_hover_button(frame, "JOIN ROOM", self.join_room_screen, bg="#333", hover_bg="#444", height=2).pack(fill="x", padx=80, pady=8)
 
     # --- Screen 2: Join ---
     def join_room_screen(self):
@@ -189,71 +238,62 @@ class BlockChatApp:
         self.clear_screen()
         
         frame = tk.Frame(self.root, bg=THEME["app_bg"])
-        frame.pack(expand=True, fill="both", padx=40)
+        frame.pack(expand=True, fill="both", padx=80)
 
-        tk.Label(frame, text="ACCESS CODE", font=("Consolas", 12, "bold"), bg=THEME["app_bg"], fg="#aaa").pack(pady=(100, 20))
-        self.entry_link = tk.Entry(frame, font=("Consolas", 12), bg=THEME["input_bg"], fg="white", relief="flat", justify="center", insertbackground="white")
-        self.entry_link.pack(fill="x", ipady=8, pady=10)
+        tk.Label(frame, text="ACCESS CODE", font=(FONT_MONO, 14, "bold"), bg=THEME["app_bg"], fg="#aaa").pack(pady=(150, 20))
+        self.entry_link = tk.Entry(frame, font=(FONT_MONO, 14), bg=THEME["input_bg"], fg="white", relief="flat", justify="center", insertbackground="white")
+        self.entry_link.pack(fill="x", ipady=10, pady=10)
         
-        tk.Button(frame, text="CONNECT", command=self.connect_to_host, bg=THEME["btn_primary"], fg="white", 
-                  font=("Consolas", 11, "bold"), relief="flat", height=2).pack(fill="x", pady=10)
-        
-        tk.Button(frame, text="BACK", command=self.setup_main_menu, bg=THEME["app_bg"], fg="#666", relief="flat").pack(pady=10)
+        self.create_hover_button(frame, "CONNECT", self.connect_to_host, height=2).pack(fill="x", pady=15)
+        self.create_hover_button(frame, "BACK", self.setup_main_menu, bg=THEME["app_bg"], hover_bg="#333").pack(pady=10)
 
     # --- Screen 3: Chat Room ---
     def setup_chat_room(self, info):
         self.clear_screen()
         self.root.configure(bg=THEME["chat_bg"])
         
-        # 1. Header
-        header = tk.Frame(self.root, bg=THEME["app_bg"], height=50, padx=15)
-        header.pack(fill="x", side="top")
+        # Layout Order: Footer -> Input -> Header -> Chat
+        
+        footer = tk.Frame(self.root, bg="#111")
+        footer.pack(side="bottom", fill="x")
+        self.create_hover_button(footer, "VIEW LEDGER", self.open_ledger_window, bg="#111", hover_bg="#222").pack(fill="x")
+
+        input_area = tk.Frame(self.root, bg=THEME["app_bg"], padx=15, pady=15)
+        input_area.pack(side="bottom", fill="x")
+        
+        self.create_hover_button(input_area, "+", self.send_file_action, bg="#333", hover_bg="#555", width=4).pack(side="left", padx=(0, 10))
+        self.msg_entry = tk.Entry(input_area, font=(FONT_MAIN, 12), bg=THEME["input_bg"], fg="white", relief="flat", insertbackground="white")
+        self.msg_entry.pack(side="left", fill="x", expand=True, ipady=8)
+        self.msg_entry.bind("<Return>", self.send_message)
+        self.create_hover_button(input_area, "SEND", self.send_message).pack(side="right", padx=(10, 0))
+
+        header = tk.Frame(self.root, bg=THEME["app_bg"], height=60, padx=20)
+        header.pack(side="top", fill="x")
         header.pack_propagate(False)
         
-        tk.Label(header, text=f"● {info}", bg=THEME["app_bg"], font=("Consolas", 10, "bold"), fg="#cccccc").pack(side="left")
+        tk.Label(header, text=f"● {info}", bg=THEME["app_bg"], font=(FONT_MONO, 12, "bold"), fg="#cccccc").pack(side="left")
         
         btn_frame = tk.Frame(header, bg=THEME["app_bg"])
         btn_frame.pack(side="right")
 
-        # Floating Toggle (PIN)
-        self.btn_pin = tk.Button(btn_frame, text="📌 PIN", command=self.toggle_floating, 
-                                 bg=THEME["btn_pin_inactive"], fg="#ccc", font=("Consolas", 9, "bold"), relief="flat", padx=8)
-        self.btn_pin.pack(side="left", padx=2)
+        self.btn_pin = self.create_hover_button(btn_frame, "📌 PIN", self.toggle_floating, bg=THEME["btn_pin_inactive"])
+        self.btn_pin.pack(side="left", padx=5)
         
         if self.is_host:
-            tk.Button(btn_frame, text="LINK", command=self.copy_link, bg=THEME["btn_primary"], fg="white",
-                      font=("Consolas", 9), relief="flat", padx=8).pack(side="left", padx=2)
+            self.create_hover_button(btn_frame, "LINK", self.copy_link).pack(side="left", padx=5)
         
-        tk.Button(btn_frame, text="EXIT", command=self.return_to_main, bg=THEME["btn_danger"], fg="white",
-                  font=("Consolas", 9), relief="flat", padx=8).pack(side="left", padx=2)
+        self.create_hover_button(btn_frame, "EXIT", self.return_to_main, bg=THEME["btn_danger"], hover_bg="#e53935").pack(side="left", padx=5)
 
-        # 2. Chat Area
         self.chat_area = scrolledtext.ScrolledText(self.root, state='disabled', bg=THEME["chat_bg"], fg="white",
-                                                   font=("Malgun Gothic", 10), relief="flat", padx=15, pady=15)
+                                                   font=(FONT_MAIN, 12), relief="flat", padx=20, pady=20)
         self.chat_area.pack(fill="both", expand=True)
-
-        # 3. Input Area
-        input_area = tk.Frame(self.root, bg=THEME["app_bg"], padx=10, pady=10)
-        input_area.pack(fill="x", side="bottom")
-        
-        tk.Button(input_area, text="+", command=self.send_file_action, bg="#333", fg="white", relief="flat", width=3, font=("Consolas", 12)).pack(side="left", padx=(0, 5))
-        
-        self.msg_entry = tk.Entry(input_area, font=("Malgun Gothic", 11), bg=THEME["input_bg"], fg="white", relief="flat", insertbackground="white")
-        self.msg_entry.pack(side="left", fill="x", expand=True, ipady=5)
-        self.msg_entry.bind("<Return>", self.send_message)
-        
-        tk.Button(input_area, text="SEND", command=self.send_message, bg=THEME["btn_primary"], fg="white", relief="flat", padx=15).pack(side="right", padx=(5, 0))
-
-        # Footer
-        tk.Button(self.root, text="VIEW LEDGER", command=self.open_ledger_window, bg="#111", fg="#444", font=("Consolas", 8), relief="flat").pack(fill="x", side="bottom")
 
     def toggle_floating(self):
         self.is_floating = not self.is_floating
         self.root.attributes('-topmost', self.is_floating)
-        if self.is_floating:
-            self.btn_pin.config(bg=THEME["btn_pin_active"], fg="white")
-        else:
-            self.btn_pin.config(bg=THEME["btn_pin_inactive"], fg="#ccc")
+        if not IS_MAC: 
+            if self.is_floating: self.btn_pin.config(bg=THEME["btn_pin_active"], fg="white")
+            else: self.btn_pin.config(bg=THEME["btn_pin_inactive"], fg="#ccc")
 
     def return_to_main(self):
         if messagebox.askyesno("Exit", "Disconnect and leave?"):
@@ -264,13 +304,12 @@ class BlockChatApp:
         self.root.clipboard_append(self.my_link)
         messagebox.showinfo("Copied", f"Code: {self.my_link}")
 
-    # --- 메시지 그리기 (오른쪽 정렬 유지) ---
     def _ui_draw_bubble(self, sender, message, is_me, is_system):
         self.chat_area.config(state='normal')
         
         if is_system:
             frame = tk.Frame(self.chat_area, bg=THEME["chat_bg"], pady=5)
-            lbl = tk.Label(frame, text=f"--- {message} ---", bg=THEME["chat_bg"], fg=THEME["system_text"], font=("Consolas", 8))
+            lbl = tk.Label(frame, text=f"--- {message} ---", bg=THEME["chat_bg"], fg=THEME["system_text"], font=(FONT_MONO, 9))
             lbl.pack()
             self.chat_area.window_create(tk.END, window=frame)
             self.chat_area.insert(tk.END, "\n")
@@ -281,26 +320,21 @@ class BlockChatApp:
             
             if is_me:
                 bubble = tk.Label(container, text=message, bg=THEME["my_bubble"], fg=THEME["my_text"],
-                                  font=("Malgun Gothic", 10), padx=12, pady=8, justify="left", wraplength=250)
+                                  font=(FONT_MAIN, 11), padx=14, pady=10, justify="left", wraplength=400)
                 bubble.pack(side="right")
-                
                 self.chat_area.window_create(tk.END, window=container)
                 self.chat_area.insert(tk.END, "\n")
-                
                 self.chat_area.tag_configure("right", justify='right')
                 self.chat_area.tag_add("right", "end-2l", "end-1l")
-                
             else:
-                name_lbl = tk.Label(container, text=sender, bg=THEME["chat_bg"], fg="#888", font=("Consolas", 8))
+                name_lbl = tk.Label(container, text=sender, bg=THEME["chat_bg"], fg="#888", font=(FONT_MONO, 9))
                 name_lbl.pack(anchor="w", padx=2)
                 
                 bubble = tk.Label(container, text=message, bg=THEME["other_bubble"], fg=THEME["other_text"],
-                                  font=("Malgun Gothic", 10), padx=12, pady=8, justify="left", wraplength=250)
+                                  font=(FONT_MAIN, 11), padx=14, pady=10, justify="left", wraplength=400)
                 bubble.pack(anchor="w")
-                
                 self.chat_area.window_create(tk.END, window=container)
                 self.chat_area.insert(tk.END, "\n")
-                
                 self.chat_area.tag_configure("left", justify='left')
                 self.chat_area.tag_add("left", "end-2l", "end-1l")
 
@@ -314,18 +348,18 @@ class BlockChatApp:
         container = tk.Frame(self.chat_area, bg=THEME["chat_bg"], pady=5)
         card_bg = THEME["my_bubble"] if is_me else THEME["other_bubble"]
         
-        display_name = textwrap.fill(filename, width=25)
+        display_name = textwrap.fill(filename, width=30)
         
         card = tk.Frame(container, bg=card_bg, bd=0)
         if is_me: card.pack(side="right")
         else: card.pack(side="left")
         
         tk.Label(card, text=f"📦\n{display_name}", bg=card_bg, fg="white", 
-                 font=("Consolas", 10, "bold"), padx=10, pady=5, justify="left").pack(anchor="w")
+                 font=(FONT_MONO, 11, "bold"), padx=14, pady=8, justify="left").pack(anchor="w")
         
         if not is_me:
-            tk.Button(card, text="DOWNLOAD", command=lambda: self.manual_download(filename), 
-                      bg="#444", fg="white", relief="flat", font=("Consolas", 8)).pack(fill="x")
+            self.create_hover_button(card, "DOWNLOAD", lambda: self.manual_download(filename), 
+                                     bg="#444", hover_bg="#555", height=1).pack(fill="x")
 
         self.chat_area.window_create(tk.END, window=container)
         self.chat_area.insert(tk.END, "\n")
@@ -353,8 +387,8 @@ class BlockChatApp:
         filepath = filedialog.askopenfilename()
         if not filepath: return
         filename = os.path.basename(filepath)
-        if os.path.getsize(filepath) > 30 * 1024 * 1024:
-            messagebox.showwarning("Limit", "Max size: 30MB")
+        if os.path.getsize(filepath) > 50 * 1024 * 1024:
+            messagebox.showwarning("Limit", "Max size: 50MB")
             return
         try:
             with open(filepath, "rb") as f: encoded = base64.b64encode(f.read()).decode('utf-8')
@@ -411,14 +445,12 @@ class BlockChatApp:
 
     def handle_client(self, c):
         client_name = None
-        buffer = ""
         try:
             while self.running:
                 data = c.recv(4096)
                 if not data: break
-                buffer += data.decode('utf-8')
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
+                buffer = data.decode('utf-8')
+                for line in buffer.split("\n"):
                     if not line: continue
                     try:
                         p = json.loads(line)
@@ -427,8 +459,7 @@ class BlockChatApp:
                             assigned_id = self.next_user_id
                             self.next_user_id += 1
                             self.safe_send(c, {"type": "WELCOME", "assigned_id": assigned_id})
-                            msg = f"'{client_name}' joined."
-                            self.mine_and_broadcast("System", 0, msg)
+                            self.mine_and_broadcast("System", 0, f"'{client_name}' joined.")
                         elif p['type'] == 'CHAT':
                             self.mine_and_broadcast(p['sender'], p['sender_id'], p['message'])
                         elif p['type'] == 'FILE':
@@ -438,8 +469,7 @@ class BlockChatApp:
         finally:
             if c in self.clients: self.clients.remove(c)
             c.close()
-            if client_name:
-                self.mine_and_broadcast("System", 0, f"'{client_name}' left.")
+            if client_name: self.mine_and_broadcast("System", 0, f"'{client_name}' left.")
 
     # --- Guest ---
     def connect_to_host(self):
@@ -459,14 +489,12 @@ class BlockChatApp:
             self.setup_main_menu()
 
     def receive(self):
-        buffer = ""
         try:
             while self.running:
                 data = self.socket.recv(4096)
                 if not data: raise ConnectionResetError()
-                buffer += data.decode('utf-8')
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
+                buffer = data.decode('utf-8')
+                for line in buffer.split("\n"):
                     if not line: continue
                     try:
                         p = json.loads(line)
@@ -529,9 +557,9 @@ class BlockChatApp:
     def open_ledger_window(self):
         win = tk.Toplevel(self.root)
         win.title("Blockchain Ledger")
-        win.geometry("600x400")
+        win.geometry("800x600")
         win.configure(bg="#1e1e1e")
-        txt = scrolledtext.ScrolledText(win, bg="#1e1e1e", fg="#00ff00", font=("Consolas", 9))
+        txt = scrolledtext.ScrolledText(win, bg="#1e1e1e", fg="#00ff00", font=(FONT_MONO, 10))
         txt.pack(fill='both', expand=True)
         log = ""
         for b in self.my_blockchain.chain:
