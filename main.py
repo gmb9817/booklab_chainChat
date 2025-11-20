@@ -89,7 +89,7 @@ class Blockchain:
         if new_block.calculate_hash() != new_block.hash: return False
         self.chain.append(new_block)
         return True
-     
+      
     def replace_chain(self, new_chain_data):
         temp_chain = []
         for b_data in new_chain_data:
@@ -124,7 +124,7 @@ class BlockChatApp:
         self.root.configure(bg=THEME["app_bg"])
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # [Mac Fix] 메뉴바 + 강제 단축키 + 우클릭 메뉴
+        # [Mac Fix] 메뉴바 + 강제 단축키 + 우클릭 메뉴 (유지)
         if IS_MAC:
             self.setup_mac_menu()
             self.force_mac_shortcuts()
@@ -208,6 +208,7 @@ class BlockChatApp:
     # 기존 기능들
     # ----------------------------------------------------------
     def apply_capture_protection(self):
+        # [수정] 로그 출력(print) 제거 - Silent Mode
         if IS_MAC:
             try:
                 from AppKit import NSApplication, NSWindowSharingNone
@@ -274,8 +275,8 @@ class BlockChatApp:
 
     def create_entry(self, parent, font_size=12, justify="left"):
         entry = tk.Entry(parent, font=(FONT_MAIN, font_size), bg=THEME["input_bg"], 
-                        fg="white", relief="flat", insertbackground="white", 
-                        justify=justify, highlightthickness=0)
+                         fg="white", relief="flat", insertbackground="white", 
+                         justify=justify, highlightthickness=0)
         self.bind_right_click(entry)
         return entry
 
@@ -358,7 +359,6 @@ class BlockChatApp:
         self.msg_entry = self.create_entry(input_area, font_size=12)
         self.msg_entry.pack(side="left", fill="x", expand=True, ipady=8)
         
-        # [수정된 부분] Mac에서 한글 입력 시 엔터 두 번 눌러야 하는 문제 해결
         self.msg_entry.bind("<Return>", self.send_message)
         self.msg_entry.bind("<KeyRelease-Return>", self.send_message) 
         
@@ -475,7 +475,7 @@ class BlockChatApp:
             dl_frame = tk.Frame(card, bg=card_bg)
             dl_frame.pack(fill="x")
             self.create_button(dl_frame, "DOWNLOAD", lambda: self.manual_download(filename), 
-                                     bg="#444", hover_bg="#555").pack(fill="x")
+                               bg="#444", hover_bg="#555").pack(fill="x")
 
         self.chat_area.window_create(tk.END, window=container)
         self.chat_area.insert(tk.END, "\n")
@@ -526,6 +526,7 @@ class BlockChatApp:
 
     def safe_send(self, sock, data):
         try:
+            # [버그 수정] 송신 시에도 확실하게 줄바꿈 문자 추가
             packet = (json.dumps(data) + "\n").encode('utf-8')
             sock.sendall(packet)
         except: pass
@@ -557,17 +558,22 @@ class BlockChatApp:
                 threading.Thread(target=self.handle_client, args=(c,), daemon=True).start()
             except: break
 
+    # --- [버그 수정 적용] 데이터 버퍼링 로직 (Host) ---
     def handle_client(self, c):
         client_name = None
+        buffer = b"" # [수정] 버퍼를 밖으로 빼고 바이트로 초기화
         try:
             while self.running:
                 data = c.recv(4096)
                 if not data: break
-                buffer = data.decode('utf-8')
-                for line in buffer.split("\n"):
-                    if not line: continue
+                
+                buffer += data # [수정] 데이터 누적
+                
+                while b"\n" in buffer: # [수정] 줄바꿈 기준으로 처리
+                    line_bytes, buffer = buffer.split(b"\n", 1)
+                    if not line_bytes: continue
                     try:
-                        p = json.loads(line)
+                        p = json.loads(line_bytes.decode('utf-8'))
                         if p['type'] == 'JOIN':
                             client_name = p['nickname']
                             assigned_id = self.next_user_id
@@ -601,16 +607,21 @@ class BlockChatApp:
             messagebox.showerror("Error", f"{e}")
             self.setup_main_menu()
 
+    # --- [버그 수정 적용] 데이터 버퍼링 로직 (Guest) ---
     def receive(self):
+        buffer = b"" # [수정] 버퍼를 밖으로 빼고 바이트로 초기화
         try:
             while self.running:
                 data = self.socket.recv(4096)
                 if not data: raise ConnectionResetError()
-                buffer = data.decode('utf-8')
-                for line in buffer.split("\n"):
-                    if not line: continue
+                
+                buffer += data # [수정] 데이터 누적
+                
+                while b"\n" in buffer: # [수정] 줄바꿈 기준으로 처리
+                    line_bytes, buffer = buffer.split(b"\n", 1)
+                    if not line_bytes: continue
                     try:
-                        p = json.loads(line)
+                        p = json.loads(line_bytes.decode('utf-8'))
                         if p['type'] == 'WELCOME':
                             self.my_id = p['assigned_id']
                             self.safe_update(self._ui_draw_bubble, "System", "Connected.", False, True)
