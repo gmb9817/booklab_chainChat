@@ -44,6 +44,10 @@ THEME = {
     "other_bubble": "#3e3e42", 
     "other_text": "#e0e0e0",
     "system_text": "#858585",   
+    "mention_bg": "#4d1818",    # 멘션 배경
+    "mention_fg": "#ff6b6b",    # 멘션 글자
+    "toast_bg": "#333333",      # 알림창 배경
+    "toast_fg": "#ffffff",      # 알림창 글자
     "btn_primary": "#0e639c",
     "btn_danger": "#c53030",
     "btn_pin_active": "#d8a016",
@@ -124,7 +128,6 @@ class BlockChatApp:
         self.root.configure(bg=THEME["app_bg"])
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # [Mac Fix] 메뉴바 + 강제 단축키 + 우클릭 메뉴
         if IS_MAC:
             self.setup_mac_menu()
             self.force_mac_shortcuts()
@@ -134,7 +137,8 @@ class BlockChatApp:
         self.my_blockchain = Blockchain()
         self.socket = None
         self.is_host = False
-        self.clients = [] 
+        self.clients = []
+        self.connected_users = []
         self.nickname = ""
         self.target_port = 9999
         self.my_link = ""
@@ -143,35 +147,65 @@ class BlockChatApp:
         self.file_cache = {}
         self.running = True 
         self.is_floating = False
+        
+        self.render_queue = []
+        self.is_rendering = False
 
         if not os.path.exists("downloads"): os.makedirs("downloads")
         self.setup_main_menu()
 
-    # ----------------------------------------------------------
-    # [Mac Shortcut Fix] 메뉴바 및 단축키 로직 강화
-    # ----------------------------------------------------------
+    # --- [기능 추가] 알림 시스템 ---
+    def flash_window(self):
+        """작업 표시줄 아이콘 깜빡임 (Windows Only)"""
+        if IS_WINDOWS:
+            try:
+                import ctypes
+                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+                if hwnd == 0: hwnd = self.root.winfo_id()
+                # FlashWindow(hwnd, True) -> 1회 깜빡임
+                ctypes.windll.user32.FlashWindow(hwnd, True)
+            except: pass
+
+    def show_toast_popup(self, title, message):
+        """화면 우측 하단에 사라지는 알림창 띄우기 (Custom Toast)"""
+        try:
+            # 팝업 윈도우 생성
+            toast = tk.Toplevel(self.root)
+            toast.overrideredirect(True) # 타이틀바 제거
+            toast.configure(bg=THEME["toast_bg"], highlightthickness=1, highlightbackground=THEME["btn_primary"])
+            toast.attributes('-topmost', True)
+            if IS_WINDOWS: toast.attributes('-alpha', 0.9) # 투명도
+
+            # 위치 계산 (우측 하단)
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            win_w, win_h = 300, 80
+            x_pos = screen_w - win_w - 20
+            y_pos = screen_h - win_h - 60 # 작업표시줄 고려
+            toast.geometry(f"{win_w}x{win_h}+{x_pos}+{y_pos}")
+
+            # 내용
+            tk.Label(toast, text=title, font=(FONT_MAIN, 10, "bold"), 
+                     bg=THEME["toast_bg"], fg=THEME["btn_primary"], anchor="w").pack(fill="x", padx=10, pady=(10, 0))
+            tk.Label(toast, text=message, font=(FONT_MAIN, 10), 
+                     bg=THEME["toast_bg"], fg=THEME["toast_fg"], anchor="w", justify="left").pack(fill="x", padx=10, pady=5)
+
+            # 3초 후 자동 소멸
+            toast.after(3000, toast.destroy)
+            
+            # 클릭 시 닫기
+            toast.bind("<Button-1>", lambda e: toast.destroy())
+        except: pass
+
+    # --- Mac Utilities ---
     def setup_mac_menu(self):
-        """Mac 상단 메뉴바 생성"""
         menubar = tk.Menu(self.root)
         app_menu = tk.Menu(menubar, tearoff=0)
-        app_menu.add_command(label="About chainChat")
-        app_menu.add_separator()
         app_menu.add_command(label="Quit", command=self.on_closing)
         menubar.add_cascade(label="App", menu=app_menu)
-        
-        edit_menu = tk.Menu(menubar, tearoff=0)
-        edit_menu.add_command(label="Undo", accelerator="Cmd+Z", command=lambda: self.root.focus_get().event_generate("<<Undo>>"))
-        edit_menu.add_separator()
-        edit_menu.add_command(label="Cut", accelerator="Cmd+X", command=lambda: self.root.focus_get().event_generate("<<Cut>>"))
-        edit_menu.add_command(label="Copy", accelerator="Cmd+C", command=lambda: self.root.focus_get().event_generate("<<Copy>>"))
-        edit_menu.add_command(label="Paste", accelerator="Cmd+V", command=lambda: self.root.focus_get().event_generate("<<Paste>>"))
-        edit_menu.add_command(label="Select All", accelerator="Cmd+A", command=lambda: self.root.focus_get().event_generate("<<SelectAll>>"))
-        menubar.add_cascade(label="Edit", menu=edit_menu)
-        
         self.root.config(menu=menubar)
 
     def force_mac_shortcuts(self):
-        """Mac 키보드 이벤트 강제 바인딩"""
         def cmd_action(event, action_key):
             widget = self.root.focus_get()
             if widget:
@@ -182,7 +216,6 @@ class BlockChatApp:
                     elif action_key == 'a': widget.event_generate("<<SelectAll>>")
                 except: pass
             return "break"
-
         self.root.bind("<Command-c>", lambda e: cmd_action(e, 'c'))
         self.root.bind("<Command-v>", lambda e: cmd_action(e, 'v'))
         self.root.bind("<Command-x>", lambda e: cmd_action(e, 'x'))
@@ -191,7 +224,6 @@ class BlockChatApp:
     def show_context_menu(self, event):
         try:
             menu = tk.Menu(self.root, tearoff=0)
-            menu.add_command(label="Cut", command=lambda: self.root.focus_get().event_generate("<<Cut>>"))
             menu.add_command(label="Copy", command=lambda: self.root.focus_get().event_generate("<<Copy>>"))
             menu.add_command(label="Paste", command=lambda: self.root.focus_get().event_generate("<<Paste>>"))
             menu.tk_popup(event.x_root, event.y_root)
@@ -204,11 +236,8 @@ class BlockChatApp:
         else:
             widget.bind("<Button-3>", self.show_context_menu)
 
-    # ----------------------------------------------------------
-    # 기존 기능들
-    # ----------------------------------------------------------
+    # --- Security & System ---
     def apply_capture_protection(self):
-        # 로그 출력(print) 제거 - Silent Mode
         if IS_MAC:
             try:
                 from AppKit import NSApplication, NSWindowSharingNone
@@ -230,7 +259,8 @@ class BlockChatApp:
         if self.socket:
             try: self.socket.close()
             except: pass
-        self.root.destroy()
+        try: self.root.destroy()
+        except: pass
         sys.exit(0)
 
     def clear_screen(self):
@@ -245,12 +275,16 @@ class BlockChatApp:
             except: pass
         self.socket = None
         self.clients = []
+        self.connected_users = []
         self.my_blockchain = Blockchain()
         self.is_host = False
         self.root.attributes('-topmost', False)
 
     def safe_update(self, func, *args):
-        self.root.after(0, lambda: func(*args))
+        try:
+            if self.root.winfo_exists():
+                self.root.after(0, lambda: func(*args))
+        except: pass
 
     def create_button(self, parent, text, command, bg=THEME["btn_primary"], hover_bg="#1177bb", width=None, height=None):
         if IS_MAC:
@@ -280,9 +314,7 @@ class BlockChatApp:
         self.bind_right_click(entry)
         return entry
 
-    # ----------------------------------------------------------
-    # [Screen] Main Menu
-    # ----------------------------------------------------------
+    # --- UI: Main Menu ---
     def setup_main_menu(self):
         self.reset_network()
         self.clear_screen()
@@ -301,17 +333,13 @@ class BlockChatApp:
         
         btn_frame1 = tk.Frame(frame, bg=THEME["app_bg"])
         btn_frame1.pack(fill="x", padx=80, pady=8)
-        btn1 = self.create_button(btn_frame1, "CREATE ROOM", self.create_room)
-        btn1.pack(fill="x")
+        self.create_button(btn_frame1, "CREATE ROOM", self.create_room).pack(fill="x")
 
         btn_frame2 = tk.Frame(frame, bg=THEME["app_bg"])
         btn_frame2.pack(fill="x", padx=80, pady=8)
-        btn2 = self.create_button(btn_frame2, "JOIN ROOM", self.join_room_screen, bg="#333", hover_bg="#444")
-        btn2.pack(fill="x")
+        self.create_button(btn_frame2, "JOIN ROOM", self.join_room_screen, bg="#333", hover_bg="#444").pack(fill="x")
 
-    # ----------------------------------------------------------
-    # [Screen] Join Room
-    # ----------------------------------------------------------
+    # --- UI: Join Room ---
     def join_room_screen(self):
         self.nickname = self.entry_nickname.get()
         if not self.nickname: 
@@ -336,19 +364,19 @@ class BlockChatApp:
         btn_frame2.pack(fill="x", pady=10)
         self.create_button(btn_frame2, "BACK", self.setup_main_menu, bg=THEME["app_bg"], hover_bg="#333").pack(fill="x")
 
-    # ----------------------------------------------------------
-    # [Screen] Chat Room
-    # ----------------------------------------------------------
+    # --- UI: Chat Room ---
     def setup_chat_room(self, info):
         self.clear_screen()
         self.root.configure(bg=THEME["chat_bg"])
         
+        # 1. Footer
         footer = tk.Frame(self.root, bg="#111")
         footer.pack(side="bottom", fill="x")
         f_btn_frame = tk.Frame(footer, bg="#111")
         f_btn_frame.pack(fill="x")
         self.create_button(f_btn_frame, "VIEW LEDGER", self.open_ledger_window, bg="#111", hover_bg="#222").pack(fill="x")
 
+        # 2. Input Area
         input_area = tk.Frame(self.root, bg=THEME["app_bg"], padx=15, pady=15)
         input_area.pack(side="bottom", fill="x")
         
@@ -358,16 +386,15 @@ class BlockChatApp:
         
         self.msg_entry = self.create_entry(input_area, font_size=12)
         self.msg_entry.pack(side="left", fill="x", expand=True, ipady=8)
-        
         self.msg_entry.bind("<Return>", self.send_message)
         self.msg_entry.bind("<KeyRelease-Return>", self.send_message) 
-        
         self.msg_entry.focus_set()
         
         send_btn_frame = tk.Frame(input_area, bg=THEME["app_bg"])
         send_btn_frame.pack(side="right", padx=(10, 0))
         self.create_button(send_btn_frame, "SEND", self.send_message).pack()
 
+        # 3. Header
         header = tk.Frame(self.root, bg=THEME["app_bg"], height=60, padx=20)
         header.pack(side="top", fill="x")
         header.pack_propagate(False)
@@ -376,6 +403,11 @@ class BlockChatApp:
         
         btn_frame = tk.Frame(header, bg=THEME["app_bg"])
         btn_frame.pack(side="right")
+
+        # 참여자 목록 버튼
+        u_frame = tk.Frame(btn_frame, bg=THEME["app_bg"])
+        u_frame.pack(side="left", padx=5)
+        self.create_button(u_frame, "👥", self.show_user_list, bg="#333", hover_bg="#555").pack()
 
         p_frame = tk.Frame(btn_frame, bg=THEME["app_bg"])
         p_frame.pack(side="left", padx=5)
@@ -391,15 +423,31 @@ class BlockChatApp:
         e_frame.pack(side="left", padx=5)
         self.create_button(e_frame, "EXIT", self.return_to_main, bg=THEME["btn_danger"], hover_bg="#e53935").pack()
 
+        # 4. Chat Area
         self.chat_area = scrolledtext.ScrolledText(self.root, state='disabled', bg=THEME["chat_bg"], fg="white",
                                                    font=(FONT_MAIN, 12), relief="flat", padx=20, pady=20, highlightthickness=0)
         self.chat_area.pack(fill="both", expand=True)
         self.bind_right_click(self.chat_area)
 
+    # --- 기능 구현 ---
+    def show_user_list(self):
+        win = tk.Toplevel(self.root)
+        win.title("Participants")
+        win.geometry("300x400")
+        win.configure(bg=THEME["app_bg"])
+        
+        lbl = tk.Label(win, text="Active Users", bg=THEME["app_bg"], fg=THEME["btn_primary"], font=(FONT_MONO, 12, "bold"))
+        lbl.pack(pady=10)
+        
+        listbox = tk.Listbox(win, bg=THEME["input_bg"], fg="white", font=(FONT_MAIN, 11), relief="flat")
+        listbox.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        for user in self.connected_users:
+            listbox.insert(tk.END, f"🟢 {user}")
+
     def toggle_floating(self):
         self.is_floating = not self.is_floating
         self.root.attributes('-topmost', self.is_floating)
-        
         if IS_WINDOWS: 
             if self.is_floating: self.btn_pin.config(bg=THEME["btn_pin_active"], fg="white")
             else: self.btn_pin.config(bg=THEME["btn_pin_inactive"], fg="#ccc")
@@ -418,6 +466,41 @@ class BlockChatApp:
         self.root.update() 
         messagebox.showinfo("Copied", f"Code: {self.my_link}")
 
+    # --- 렌더링 최적화 ---
+    def process_render_queue(self):
+        if not self.render_queue:
+            self.is_rendering = False
+            return
+
+        self.is_rendering = True
+        chunk = self.render_queue[:5]
+        self.render_queue = self.render_queue[5:]
+
+        for block in chunk:
+            self.display_block_ui(block)
+        
+        self.root.after(10, self.process_render_queue)
+
+    def add_to_render_queue(self, block):
+        self.render_queue.append(block)
+        if not self.is_rendering:
+            self.process_render_queue()
+
+    def display_block(self, block):
+        self.safe_update(self.add_to_render_queue, block)
+
+    def display_block_ui(self, block):
+        if block.message.startswith("FILE_TRANSFER:") or block.message.startswith("📎"):
+            filename = block.message.replace("FILE_TRANSFER:", "").replace("📎 파일 전송: ", "")
+            self._ui_draw_file(filename, block.sender, block.sender_id)
+            return
+        
+        if block.sender == "System":
+            self._ui_draw_bubble("System", block.message, False, True)
+        else:
+            is_me = (block.sender_id == self.my_id)
+            self._ui_draw_bubble(block.sender, block.message, is_me, False)
+
     def _ui_draw_bubble(self, sender, message, is_me, is_system):
         self.chat_area.config(state='normal')
         
@@ -432,8 +515,19 @@ class BlockChatApp:
         else:
             container = tk.Frame(self.chat_area, bg=THEME["chat_bg"], pady=2)
             
+            # [기능 구현] 멘션 알림 로직
+            bg_color = THEME["my_bubble"] if is_me else THEME["other_bubble"]
+            fg_color = THEME["my_text"] if is_me else THEME["other_text"]
+            
+            if f"@{self.nickname}" in message and not is_me:
+                bg_color = THEME["mention_bg"]
+                fg_color = THEME["mention_fg"]
+                # 알림 실행
+                self.flash_window()
+                self.show_toast_popup("🔔 알림", f"{sender}님이 나를 언급했습니다.")
+
             if is_me:
-                bubble = tk.Label(container, text=message, bg=THEME["my_bubble"], fg=THEME["my_text"],
+                bubble = tk.Label(container, text=message, bg=bg_color, fg=fg_color,
                                   font=(FONT_MAIN, 11), padx=14, pady=10, justify="left", wraplength=400)
                 bubble.pack(side="right")
                 self.chat_area.window_create(tk.END, window=container)
@@ -444,7 +538,7 @@ class BlockChatApp:
                 name_lbl = tk.Label(container, text=sender, bg=THEME["chat_bg"], fg="#888", font=(FONT_MONO, 9))
                 name_lbl.pack(anchor="w", padx=2)
                 
-                bubble = tk.Label(container, text=message, bg=THEME["other_bubble"], fg=THEME["other_text"],
+                bubble = tk.Label(container, text=message, bg=bg_color, fg=fg_color,
                                   font=(FONT_MAIN, 11), padx=14, pady=10, justify="left", wraplength=400)
                 bubble.pack(anchor="w")
                 self.chat_area.window_create(tk.END, window=container)
@@ -471,7 +565,10 @@ class BlockChatApp:
         tk.Label(card, text=f"📦\n{display_name}", bg=card_bg, fg="white", 
                  font=(FONT_MONO, 11, "bold"), padx=14, pady=8, justify="left").pack(anchor="w")
         
+        # 파일 보낸 사람 표시
         if not is_me:
+            tk.Label(card, text=f"From: {sender_name}", bg=card_bg, fg="#aaa", font=(FONT_MONO, 8)).pack(anchor="w", padx=10)
+            
             dl_frame = tk.Frame(card, bg=card_bg)
             dl_frame.pack(fill="x")
             self.create_button(dl_frame, "DOWNLOAD", lambda: self.manual_download(filename), 
@@ -498,6 +595,7 @@ class BlockChatApp:
                 messagebox.showinfo("Success", "File Saved.")
             except Exception as e: messagebox.showerror("Error", str(e))
 
+    # --- Network Logic ---
     def send_file_action(self):
         filepath = filedialog.askopenfilename()
         if not filepath: return
@@ -537,6 +635,8 @@ class BlockChatApp:
         self.my_id = 1
         self.next_user_id = 2 
         self.running = True
+        self.connected_users = [self.nickname] 
+        
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         while True:
@@ -554,33 +654,32 @@ class BlockChatApp:
                 c, a = self.socket.accept()
                 self.clients.append(c)
                 self.safe_send(c, {"type": "SYNC", "chain": [b.__dict__ for b in self.my_blockchain.chain]})
+                # 유저 목록 전송
+                self.safe_send(c, {"type": "USER_LIST", "users": self.connected_users})
                 threading.Thread(target=self.handle_client, args=(c,), daemon=True).start()
             except: break
 
-    # ----------------------------------------------------------
-    # [Bug Fix] 방장용 네트워크 수신부 (버퍼링 + 패킷 복원)
-    # ----------------------------------------------------------
     def handle_client(self, c):
         client_name = None
-        buffer = b"" # [수정] 바이트 버퍼를 반복문 밖으로
+        buffer = b"" 
         try:
             while self.running:
                 data = c.recv(4096)
                 if not data: break
-                
-                buffer += data # [수정] 데이터 누적
-                
-                while b"\n" in buffer: # [수정] 줄바꿈 찾기
+                buffer += data
+                while b"\n" in buffer:
                     line_bytes, buffer = buffer.split(b"\n", 1)
                     if not line_bytes: continue
-                    
                     try:
                         p = json.loads(line_bytes.decode('utf-8'))
                         if p['type'] == 'JOIN':
                             client_name = p['nickname']
                             assigned_id = self.next_user_id
                             self.next_user_id += 1
+                            self.connected_users.append(client_name)
                             self.safe_send(c, {"type": "WELCOME", "assigned_id": assigned_id})
+                            # 접속자 업데이트 방송
+                            for client in self.clients: self.safe_send(client, {"type": "USER_LIST", "users": self.connected_users})
                             self.mine_and_broadcast("System", 0, f"'{client_name}' joined.")
                         elif p['type'] == 'CHAT':
                             self.mine_and_broadcast(p['sender'], p['sender_id'], p['message'])
@@ -590,6 +689,9 @@ class BlockChatApp:
         except: pass
         finally:
             if c in self.clients: self.clients.remove(c)
+            if client_name and client_name in self.connected_users:
+                self.connected_users.remove(client_name)
+                for client in self.clients: self.safe_send(client, {"type": "USER_LIST", "users": self.connected_users})
             c.close()
             if client_name: self.mine_and_broadcast("System", 0, f"'{client_name}' left.")
 
@@ -609,22 +711,16 @@ class BlockChatApp:
             messagebox.showerror("Error", f"{e}")
             self.setup_main_menu()
 
-    # ----------------------------------------------------------
-    # [Bug Fix] 참여자용 네트워크 수신부 (버퍼링 + 패킷 복원)
-    # ----------------------------------------------------------
     def receive(self):
-        buffer = b"" # [수정] 바이트 버퍼를 반복문 밖으로
+        buffer = b""
         try:
             while self.running:
                 data = self.socket.recv(4096)
                 if not data: raise ConnectionResetError()
-                
-                buffer += data # [수정] 데이터 누적
-                
-                while b"\n" in buffer: # [수정] 줄바꿈 찾기
+                buffer += data
+                while b"\n" in buffer:
                     line_bytes, buffer = buffer.split(b"\n", 1)
                     if not line_bytes: continue
-                    
                     try:
                         p = json.loads(line_bytes.decode('utf-8'))
                         if p['type'] == 'WELCOME':
@@ -633,8 +729,9 @@ class BlockChatApp:
                         elif p['type'] == 'SYNC':
                             if self.my_blockchain.replace_chain(p['chain']):
                                 self.safe_update(self._ui_draw_bubble, "System", "History Synced.", False, True)
+                                # 렌더링 큐에 추가 (렉 방지)
                                 for b in self.my_blockchain.chain[1:]: 
-                                    self.safe_update(self.display_block, b)
+                                    self.safe_update(self.add_to_render_queue, b)
                         elif p['type'] == 'BLOCK':
                             b = p['data']
                             new_b = Block(b['index'], b['timestamp'], b['sender'], b['sender_id'], b['message'], b['previous_hash'])
@@ -648,6 +745,8 @@ class BlockChatApp:
                             new_b.hash = b['hash']
                             if self.my_blockchain.add_block(new_b): 
                                 self.safe_update(self.display_block, new_b)
+                        elif p['type'] == 'USER_LIST':
+                            self.connected_users = p['users']
                     except: continue
         except:
             if self.running:
@@ -670,18 +769,6 @@ class BlockChatApp:
         if self.my_blockchain.add_block(new_b):
             self.safe_update(self.display_block, new_b)
             for c in self.clients: self.safe_send(c, {"type": "BLOCK", "data": new_b.__dict__})
-
-    def display_block(self, block):
-        if block.message.startswith("FILE_TRANSFER:") or block.message.startswith("📎"):
-            filename = block.message.replace("FILE_TRANSFER:", "").replace("📎 파일 전송: ", "")
-            self._ui_draw_file(filename, block.sender, block.sender_id)
-            return
-        
-        if block.sender == "System":
-            self._ui_draw_bubble("System", block.message, False, True)
-        else:
-            is_me = (block.sender_id == self.my_id)
-            self._ui_draw_bubble(block.sender, block.message, is_me, False)
 
     def open_ledger_window(self):
         win = tk.Toplevel(self.root)
