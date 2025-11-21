@@ -124,7 +124,7 @@ class BlockChatApp:
         self.root.configure(bg=THEME["app_bg"])
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # [Mac Fix] 메뉴바 + 강제 단축키 + 우클릭 메뉴 (유지)
+        # [Mac Fix] 메뉴바 + 강제 단축키 + 우클릭 메뉴
         if IS_MAC:
             self.setup_mac_menu()
             self.force_mac_shortcuts()
@@ -208,7 +208,7 @@ class BlockChatApp:
     # 기존 기능들
     # ----------------------------------------------------------
     def apply_capture_protection(self):
-        # [수정] 로그 출력(print) 제거 - Silent Mode
+        # 로그 출력(print) 제거 - Silent Mode
         if IS_MAC:
             try:
                 from AppKit import NSApplication, NSWindowSharingNone
@@ -526,7 +526,6 @@ class BlockChatApp:
 
     def safe_send(self, sock, data):
         try:
-            # [버그 수정] 송신 시에도 확실하게 줄바꿈 문자 추가
             packet = (json.dumps(data) + "\n").encode('utf-8')
             sock.sendall(packet)
         except: pass
@@ -558,10 +557,12 @@ class BlockChatApp:
                 threading.Thread(target=self.handle_client, args=(c,), daemon=True).start()
             except: break
 
-    # --- [버그 수정 적용] 데이터 버퍼링 로직 (Host) ---
+    # ----------------------------------------------------------
+    # [Bug Fix] 방장용 네트워크 수신부 (버퍼링 + 패킷 복원)
+    # ----------------------------------------------------------
     def handle_client(self, c):
         client_name = None
-        buffer = b"" # [수정] 버퍼를 밖으로 빼고 바이트로 초기화
+        buffer = b"" # [수정] 바이트 버퍼를 반복문 밖으로
         try:
             while self.running:
                 data = c.recv(4096)
@@ -569,9 +570,10 @@ class BlockChatApp:
                 
                 buffer += data # [수정] 데이터 누적
                 
-                while b"\n" in buffer: # [수정] 줄바꿈 기준으로 처리
+                while b"\n" in buffer: # [수정] 줄바꿈 찾기
                     line_bytes, buffer = buffer.split(b"\n", 1)
                     if not line_bytes: continue
+                    
                     try:
                         p = json.loads(line_bytes.decode('utf-8'))
                         if p['type'] == 'JOIN':
@@ -607,9 +609,11 @@ class BlockChatApp:
             messagebox.showerror("Error", f"{e}")
             self.setup_main_menu()
 
-    # --- [버그 수정 적용] 데이터 버퍼링 로직 (Guest) ---
+    # ----------------------------------------------------------
+    # [Bug Fix] 참여자용 네트워크 수신부 (버퍼링 + 패킷 복원)
+    # ----------------------------------------------------------
     def receive(self):
-        buffer = b"" # [수정] 버퍼를 밖으로 빼고 바이트로 초기화
+        buffer = b"" # [수정] 바이트 버퍼를 반복문 밖으로
         try:
             while self.running:
                 data = self.socket.recv(4096)
@@ -617,9 +621,10 @@ class BlockChatApp:
                 
                 buffer += data # [수정] 데이터 누적
                 
-                while b"\n" in buffer: # [수정] 줄바꿈 기준으로 처리
+                while b"\n" in buffer: # [수정] 줄바꿈 찾기
                     line_bytes, buffer = buffer.split(b"\n", 1)
                     if not line_bytes: continue
+                    
                     try:
                         p = json.loads(line_bytes.decode('utf-8'))
                         if p['type'] == 'WELCOME':
